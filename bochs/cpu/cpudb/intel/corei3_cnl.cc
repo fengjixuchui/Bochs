@@ -235,7 +235,7 @@ Bit32u corei3_cnl_t::get_vmx_extensions_bitmask(void) const
          BX_VMX_VIRTUAL_NMI |
          BX_VMX_APIC_VIRTUALIZATION |
          BX_VMX_WBINVD_VMEXIT |
-      /* BX_VMX_MONITOR_TRAP_FLAG | */ // not implemented yet
+         BX_VMX_MONITOR_TRAP_FLAG |
          BX_VMX_VPID |
          BX_VMX_EPT |
          BX_VMX_UNRESTRICTED_GUEST |
@@ -252,7 +252,7 @@ Bit32u corei3_cnl_t::get_vmx_extensions_bitmask(void) const
          BX_VMX_VMCS_SHADOWING |
          BX_VMX_EPT_EXCEPTION |
          BX_VMX_SW_INTERRUPT_INJECTION_ILEN_0 |
-      /* BX_VMX_MBE_CONTROL - not implemeted yet */
+         BX_VMX_MBE_CONTROL |
          BX_VMX_TSC_SCALING;
 }
 

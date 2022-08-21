@@ -134,22 +134,26 @@ enum VMX_vmexit_reason {
    VMX_VMEXIT_PML_LOGFULL = 62,
    VMX_VMEXIT_XSAVES = 63,
    VMX_VMEXIT_XRSTORS = 64,
-   VMX_VMEXIT_RESERVED65 = 65,
+   VMX_VMEXIT_PCONFIG = 65,
    VMX_VMEXIT_SPP = 66,
    VMX_VMEXIT_UMWAIT = 67,
    VMX_VMEXIT_TPAUSE = 68,
-   VMX_VMEXIT_RESERVED69 = 69,
+   VMX_VMEXIT_LOADIWKEY = 69,
    VMX_VMEXIT_RESERVED70 = 70,
    VMX_VMEXIT_RESERVED71 = 71,
    VMX_VMEXIT_ENQCMD_PASID = 72,
    VMX_VMEXIT_ENQCMDS_PASID = 73,
+   VMX_VMEXIT_BUS_LOCK = 74,
+   VMX_VMEXIT_NOTIFY_WINDOW = 75,
    VMX_VMEXIT_LAST_REASON
 };
 
+// note, MONITOR_TRAP_FLAG should not be here because it taken between instructions
 #define IS_TRAP_LIKE_VMEXIT(reason) \
       (reason == VMX_VMEXIT_TPR_THRESHOLD || \
        reason == VMX_VMEXIT_VIRTUALIZED_EOI || \
-       reason == VMX_VMEXIT_APIC_WRITE)
+       reason == VMX_VMEXIT_APIC_WRITE || \
+       reason == VMX_VMEXIT_BUS_LOCK)
 
 // VMexit on CR register access
 enum {
@@ -169,7 +173,7 @@ enum VMX_vmentry_error {
 
 // VMABORT error code
 enum VMX_vmabort_code {
-   VMABORT_SAVING_GUEST_MSRS_FAILURE,
+   VMABORT_SAVING_GUEST_MSRS_FAILURE = 0,
    VMABORT_HOST_PDPTR_CORRUPTED,
    VMABORT_VMEXIT_VMCS_CORRUPTED,
    VMABORT_LOADING_HOST_MSRS,
@@ -746,7 +750,7 @@ typedef struct bx_VMCS
 #define VMX_VM_EXEC_CTRL3_EPT_VIOLATION_EXCEPTION   (1 << 18) /* #VE Exception */
 #define VMX_VM_EXEC_CTRL3_SUPPRESS_GUEST_VMX_TRACE  (1 << 19) /* Processor Trace (not implemented) */
 #define VMX_VM_EXEC_CTRL3_XSAVES_XRSTORS            (1 << 20) /* XSAVES */
-#define VMX_VM_EXEC_CTRL3_MBE_CTRL                  (1 << 22) /* Mode Based Execution Control (not implemented yet) */
+#define VMX_VM_EXEC_CTRL3_MBE_CTRL                  (1 << 22) /* Mode Based Execution Control */
 #define VMX_VM_EXEC_CTRL3_SUBPAGE_WR_PROTECT_CTRL   (1 << 23) /* Sub-Page Write Protection Control */
 #define VMX_VM_EXEC_CTRL3_PROCESSOR_TRACE_USE_GPA   (1 << 24) /* Processor Trace (not implemented) */
 #define VMX_VM_EXEC_CTRL3_TSC_SCALING               (1 << 25) /* TSC Scaling */

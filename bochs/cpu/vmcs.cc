@@ -712,7 +712,7 @@ void BX_CPU_C::init_secondary_proc_based_vmexec_ctrls(void)
   //   [19] Reserved (must be '0)
   //   [20] XSAVES Exiting
   //   [21] Reserved (must be '0)
-  //   [22] Mode Based Execution Control (MBE) (not implemented yet)
+  //   [22] Mode Based Execution Control (MBE)
   //   [23] Sub Page Protection
   //   [24] Reserved (must be '0)
   //   [25] Enable TSC Scaling
@@ -775,6 +775,11 @@ void BX_CPU_C::init_secondary_proc_based_vmexec_ctrls(void)
   }
 #endif
 #if BX_SUPPORT_VMX >= 2
+  if (BX_SUPPORT_VMX_EXTENSION(BX_VMX_MBE_CONTROL)) {
+    if (! BX_SUPPORT_VMX_EXTENSION(BX_VMX_EPT))
+      BX_PANIC(("VMX MBE feature requires EPT support !"));
+    cap->vmx_vmexec_ctrl2_supported_bits |= VMX_VM_EXEC_CTRL3_MBE_CTRL;
+  }
   if (BX_SUPPORT_VMX_EXTENSION(BX_VMX_SPP)) {
     if (! BX_SUPPORT_VMX_EXTENSION(BX_VMX_EPT))
       BX_PANIC(("VMX SPP feature requires EPT support !"));
@@ -814,6 +819,7 @@ void BX_CPU_C::init_vmexit_ctrls(void)
   //      [22] Save VMX preemption timer counter on VMEXIT
   //      [28] Save host CET state on VMEXIT
   //      [29] Save host MSR_IA32_PKRS on VMEXIT
+  //      [30] Save guest MSR_PERF_GLOBAL_CTRL on VMEXIT
 
   cap->vmx_vmexit_ctrl_supported_bits = 
       VMX_VMEXIT_CTRL1_INTA_ON_VMEXIT | VMX_VMEXIT_CTRL1_SAVE_DBG_CTRLS;
@@ -844,6 +850,8 @@ void BX_CPU_C::init_vmexit_ctrls(void)
   if (BX_CPUID_SUPPORT_ISA_EXTENSION(BX_ISA_PKS))
     cap->vmx_vmexit_ctrl_supported_bits |= VMX_VMEXIT_CTRL1_LOAD_HOST_PKRS;
 #endif
+  if (BX_SUPPORT_VMX_EXTENSION(BX_VMX_PERF_GLOBAL_CTRL))
+    cap->vmx_vmexit_ctrl_supported_bits |= VMX_VMEXIT_CTRL1_SAVE_PERF_GLOBAL_CTRL;
 }
 
 void BX_CPU_C::init_vmentry_ctrls(void)

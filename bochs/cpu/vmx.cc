@@ -114,15 +114,17 @@ static const char *VMX_vmexit_reason_name[] =
   /* 62 */  "PML Log Full",
   /* 63 */  "XSAVES",
   /* 64 */  "XRSTORS",
-  /* 65 */  "Reserved65",
+  /* 65 */  "PCONFIG",
   /* 66 */  "Sub-Page Protection",
   /* 67 */  "UMWAIT",
   /* 68 */  "TPAUSE",
-  /* 69 */  "Reserved69",
+  /* 69 */  "LOADIWKEY",
   /* 70 */  "Reserved70",
   /* 71 */  "Reserved71",
   /* 72 */  "ENQCMD PASID Translation",
   /* 73 */  "ENQCMDS PASID Translation",
+  /* 74 */  "Bus Lock",
+  /* 75 */  "Notify Window",
 };
 
 #include "decoder/ia_opcodes.h"
@@ -138,7 +140,9 @@ void BX_CPU_C::set_VMCSPTR(Bit64u vmxptr)
   if (vmxptr != BX_INVALID_VMCSPTR) {
     BX_CPU_THIS_PTR vmcshostptr = BX_CPU_THIS_PTR getHostMemAddr(vmxptr, BX_WRITE);
 #if BX_SUPPORT_MEMTYPE
-    BX_CPU_THIS_PTR vmcs_memtype = MEMTYPE(resolve_memtype(vmxptr));
+    // IA32_VMX_BASIC MSR report the memory type that should be used for the VMCS, for data structures referenced by 
+    // pointers in the VMCS (I/O bitmaps, virtual-APIC page, MSR areas for VMX transitions), and for the MSEG header
+    BX_CPU_THIS_PTR vmcs_memtype = BX_MEMTYPE_WB;
 #endif
   }
   else {
@@ -823,6 +827,13 @@ VMX_error_code BX_CPU_C::VMenterLoadCheckVmControls(void)
     vm->spptp = (bx_phy_address) VMread64(VMCS_64BIT_CONTROL_SPPTP);
     if (! IsValidPageAlignedPhyAddr(vm->spptp)) {
        BX_ERROR(("VMFAIL: VMCS EXEC CTRL: SPP base phy addr malformed"));
+       return VMXERR_VMENTRY_INVALID_VM_CONTROL_FIELD;
+    }
+  }
+
+  if (vm->vmexec_ctrls3 & VMX_VM_EXEC_CTRL3_MBE_CTRL) {
+    if ((vm->vmexec_ctrls3 & VMX_VM_EXEC_CTRL3_EPT_ENABLE) == 0) {
+       BX_ERROR(("VMFAIL: VMCS EXEC CTRL: MBE is enabled without EPT"));
        return VMXERR_VMENTRY_INVALID_VM_CONTROL_FIELD;
     }
   }
@@ -2146,6 +2157,12 @@ Bit32u BX_CPU_C::VMenterLoadCheckGuestState(Bit64u *qualification)
       mask_event(BX_EVENT_NMI);
   }
 
+  if (vm->vmexec_ctrls2 & VMX_VM_EXEC_CTRL2_MONITOR_TRAP_FLAG) {
+    signal_event(BX_EVENT_VMX_MONITOR_TRAP_FLAG);
+      mask_event(BX_EVENT_VMX_MONITOR_TRAP_FLAG);
+    BX_CPU_THIS_PTR async_event = 1;
+  }
+
   if (vm->vmexec_ctrls2 & VMX_VM_EXEC_CTRL2_NMI_WINDOW_EXITING)
     signal_event(BX_EVENT_VMX_VIRTUAL_NMI);
 
@@ -2715,13 +2732,13 @@ void BX_CPU_C::VMexit(Bit32u reason, Bit64u qualification)
   if (BX_CPU_THIS_PTR in_event) {
     VMwrite32(VMCS_32BIT_IDT_VECTORING_INFO, vm->idt_vector_info | 0x80000000);
     VMwrite32(VMCS_32BIT_IDT_VECTORING_ERR_CODE, vm->idt_vector_error_code);
-    BX_CPU_THIS_PTR in_event = 0;
+    BX_CPU_THIS_PTR in_event = false;
   }
   else {
     VMwrite32(VMCS_32BIT_IDT_VECTORING_INFO, 0);
   }
 
-  BX_CPU_THIS_PTR nmi_unblocking_iret = 0;
+  BX_CPU_THIS_PTR nmi_unblocking_iret = false;
 
   // VMEXITs are FAULT-like: restore RIP/RSP to value before VMEXIT occurred
   if (! IS_TRAP_LIKE_VMEXIT(reason)) {
@@ -2733,7 +2750,7 @@ void BX_CPU_C::VMexit(Bit32u reason, Bit64u qualification)
 #endif
     }
   }
-  BX_CPU_THIS_PTR speculative_rsp = 0;
+  BX_CPU_THIS_PTR speculative_rsp = false;
 
   //
   // STEP 1: Saving Guest State to VMCS
@@ -2751,7 +2768,7 @@ void BX_CPU_C::VMexit(Bit32u reason, Bit64u qualification)
     }
   }
 
-  BX_CPU_THIS_PTR in_vmx_guest = 0;
+  BX_CPU_THIS_PTR in_vmx_guest = false;
 
   // entering VMX root mode: clear possibly pending guest VMX events
   clear_event(BX_EVENT_VMX_VTPR_UPDATE |
@@ -2840,7 +2857,7 @@ void BX_CPP_AttrRegparmN(1) BX_CPU_C::VMXON(bxInstruction_c *i)
     BX_CPU_THIS_PTR vmcsptr = BX_INVALID_VMCSPTR;
     BX_CPU_THIS_PTR vmcshostptr = 0;
     BX_CPU_THIS_PTR vmxonptr = pAddr;
-    BX_CPU_THIS_PTR in_vmx = 1;
+    BX_CPU_THIS_PTR in_vmx = true;
     mask_event(BX_EVENT_INIT); // INIT is disabled in VMX root mode
     // block and disable A20M;
 
@@ -2889,7 +2906,7 @@ void BX_CPP_AttrRegparmN(1) BX_CPU_C::VMXOFF(bxInstruction_c *i)
 */
   {
     BX_CPU_THIS_PTR vmxonptr = BX_INVALID_VMCSPTR;
-    BX_CPU_THIS_PTR in_vmx = 0;  // leave VMX operation mode
+    BX_CPU_THIS_PTR in_vmx = false;  // leave VMX operation mode
     unmask_event(BX_EVENT_INIT);
      // unblock and enable A20M;
 #if BX_SUPPORT_MONITOR_MWAIT
@@ -2980,10 +2997,10 @@ void BX_CPP_AttrRegparmN(1) BX_CPU_C::VMLAUNCH(bxInstruction_c *i)
   if (! BX_CPU_THIS_PTR in_vmx || ! protected_mode() || BX_CPU_THIS_PTR cpu_mode == BX_MODE_LONG_COMPAT)
     exception(BX_UD_EXCEPTION, 0);
 
-  unsigned vmlaunch = 0;
+  bool vmlaunch = false;
   if ((i->getIaOpcode() == BX_IA_VMLAUNCH)) {
     BX_DEBUG(("VMLAUNCH VMCS ptr: 0x" FMT_ADDRX64, BX_CPU_THIS_PTR vmcsptr));
-    vmlaunch = 1;
+    vmlaunch = true;
   }
   else {
     BX_DEBUG(("VMRESUME VMCS ptr: 0x" FMT_ADDRX64, BX_CPU_THIS_PTR vmcsptr));
@@ -3110,7 +3127,7 @@ void BX_CPP_AttrRegparmN(1) BX_CPU_C::VMLAUNCH(bxInstruction_c *i)
    FI;
 */
 
-  BX_CPU_THIS_PTR in_vmx_guest = 1;
+  BX_CPU_THIS_PTR in_vmx_guest = true;
 
   unmask_event(BX_EVENT_INIT);
 

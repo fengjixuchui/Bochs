@@ -1022,7 +1022,8 @@ void bx_dbg_info_control_regs_command(void)
   dbg_printf("    PWT=page-level write-through=%d\n", (cr3>>3) & 1);
 #if BX_CPU_LEVEL >= 5
   Bit32u cr4 = SIM->get_param_num("CR4", dbg_cpu_list)->get();
-  dbg_printf("CR4=0x%08x: %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s\n", cr4,
+  dbg_printf("CR4=0x%08x: %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s\n", cr4,
+    (cr4 & (1<<25)) ? "UINTR" : "uintr",
     (cr4 & (1<<24)) ? "PKS" : "pks",
     (cr4 & (1<<23)) ? "CET" : "cet",
     (cr4 & (1<<22)) ? "PKE" : "pke",
@@ -1063,9 +1064,10 @@ void bx_dbg_info_control_regs_command(void)
 #if BX_CPU_LEVEL >= 6
   if (BX_CPU(dbg_cpu)->is_cpu_extension_supported(BX_ISA_XSAVE)) {
     Bit32u xcr0 = SIM->get_param_num("XCR0", dbg_cpu_list)->get();
-    dbg_printf("XCR0=0x%08x: %s %s %s %s %s %s %s %s %s %s %s\n", xcr0,
-      (xcr0 & (1<<11)) ? "CET_S" : "cet_s",
-      (xcr0 & (1<<10)) ? "CET_U" : "cet_u",
+    dbg_printf("XCR0=0x%08x: %s %s %s %s %s %s %s %s %s %s %s %s\n", xcr0,
+      (xcr0 & (1<<14)) ? "UINTR" : "uintr",
+      (xcr0 & (1<<12)) ? "CET_S" : "cet_s",
+      (xcr0 & (1<<11)) ? "CET_U" : "cet_u",
       (xcr0 & (1<<9))  ? "PKRU" : "pkru",
       (xcr0 & (1<<7))  ? "HI_ZMM" : "hi_zmm",
       (xcr0 & (1<<6))  ? "ZMM_HI256" : "zmm_hi256",
@@ -2675,9 +2677,9 @@ void bx_dbg_writemem_command(const char *filename, bx_address laddr, unsigned le
   fclose(f);
 }
 
-void bx_dbg_setpmem_command(bx_phy_address paddr, unsigned len, Bit32u val)
+void bx_dbg_setpmem_command(bx_phy_address paddr, unsigned len, Bit64u val)
 {
-  Bit8u buf[4];
+  Bit8u buf[8];
 
   switch (len) {
     case 1:
@@ -2692,6 +2694,16 @@ void bx_dbg_setpmem_command(bx_phy_address paddr, unsigned len, Bit32u val)
       buf[1] = val & 0xff; val >>= 8;
       buf[2] = val & 0xff; val >>= 8;
       buf[3] = val & 0xff;
+      break;
+    case 8:
+      buf[0] = val & 0xff; val >>= 8;
+      buf[1] = val & 0xff; val >>= 8;
+      buf[2] = val & 0xff; val >>= 8;
+      buf[3] = val & 0xff; val >>= 8;
+      buf[4] = val & 0xff; val >>= 8;
+      buf[5] = val & 0xff; val >>= 8;
+      buf[6] = val & 0xff; val >>= 8;
+      buf[7] = val & 0xff;
       break;
     default:
       dbg_printf("Error: setpmem: bad length value = %u\n", len);
@@ -3108,18 +3120,30 @@ void bx_dbg_info_idt_command(unsigned from, unsigned to)
     dbg_printf("You can list individual entries with 'info idt [NUM]' or groups with 'info idt [NUM] [NUM]'\n");
 }
 
-void bx_dbg_info_gdt_command(unsigned from, unsigned to)
+void bx_dbg_info_lgdt_command(unsigned from, unsigned to, bool gdt)
 {
-  bx_dbg_global_sreg_t gdtr;
-  BX_CPU(dbg_cpu)->dbg_get_gdtr(&gdtr);
   bool all = 0;
+  const char *name = gdt ? "gdt" : "ldt";
+  bx_address base = 0;
+  Bit32u limit = 0;
+
+  if (gdt) {
+      bx_dbg_global_sreg_t gdtr;
+      BX_CPU(dbg_cpu)->dbg_get_gdtr(&gdtr);
+      base = gdtr.base;
+      limit = gdtr.limit;
+  }
+  else { // LDT
+      base = SIM->get_param_num("LDTR.base", dbg_cpu_list)->get64();
+      limit = SIM->get_param_num("LDTR.limit_scaled", dbg_cpu_list)->get();
+  }
 
   if (to == (unsigned) EMPTY_ARG) {
     to = from;
     if(from == (unsigned) EMPTY_ARG) { from = 0; to = 0xffff; all = 1; }
   }
   if (from > 0xffff || to > 0xffff) {
-    dbg_printf("GDT entry should be [0-65535], 'info gdt' command malformed\n");
+    dbg_printf("%s entry should be [0-65535], 'info %s' command malformed\n", name, name);
     return;
   }
   if (from > to) {
@@ -3128,67 +3152,72 @@ void bx_dbg_info_gdt_command(unsigned from, unsigned to)
     to = temp;
   }
 
-  dbg_printf("Global Descriptor Table (base=0x" FMT_ADDRX ", limit=%d):\n", gdtr.base, gdtr.limit);
+  dbg_printf("%s (base=0x" FMT_ADDRX ", limit=%d):\n", name, base, limit);
   for (unsigned n = from; n<=to; n++) {
-    Bit8u entry[8];
-    if (8*n + 7 > gdtr.limit) break;
-    if (bx_dbg_read_linear(dbg_cpu, gdtr.base + 8*n, 8, entry)) {
-      dbg_printf("GDT[0x%04x]=", n << 3);
+    Bit8u entry[16];
+    if (8*n + 7 > limit) break;
+    if (bx_dbg_read_linear(dbg_cpu, base + 8*n, 8, entry)) {
+      if (gdt) {
+        dbg_printf("%s[0x%04x]=", name, n << 3);
+      }
+      else { // LDT
+        dbg_printf("%s[0x%02x]=", name, n);
+      }
 
       Bit32u lo = (entry[3]  << 24) | (entry[2]  << 16) | (entry[1]  << 8) | (entry[0]);
       Bit32u hi = (entry[7]  << 24) | (entry[6]  << 16) | (entry[5]  << 8) | (entry[4]);
 
-      bx_dbg_print_descriptor(lo, hi);
+      if (0 == lo && 0 == hi) {
+        dbg_printf("<null entry>\n");
+        continue;
+      }
+
+#if BX_SUPPORT_X86_64
+      if (BX_CPU(dbg_cpu)->long_mode()) {
+        const Bit32u sys_descriptor = (1 << 12);
+        if ((hi & sys_descriptor) == 0) {
+          n++;
+          if (8*n + 7 > limit) break;
+          if (bx_dbg_read_linear(dbg_cpu, base + 8*n, 8, entry + 8)) {
+            Bit32u lo2 = (entry[11] << 24) | (entry[10] << 16) | (entry[9] << 8) | (entry[8]);
+            Bit32u hi2 = (entry[15] << 24) | (entry[14] << 16) | (entry[13] << 8) | (entry[12]);
+
+            bx_dbg_print_descriptor64(lo, hi, lo2, hi2);
+          }
+          else {
+            dbg_printf("error: %sr+8*%d points to incomplete (size must be 16) descriptor, linear address 0x" FMT_ADDRX "\n", name, n, base);
+          }
+          continue;
+        }
+        else {
+          bx_dbg_print_descriptor(lo, hi);
+          continue;
+        }
+      }
+      else
+#endif
+      {
+        bx_dbg_print_descriptor(lo, hi);
+      }
     }
     else {
-      dbg_printf("error: GDTR+8*%d points to invalid linear address 0x" FMT_ADDRX "\n",
-        n, gdtr.base);
+      dbg_printf("error: %sr+8*%d points to invalid linear address 0x" FMT_ADDRX "\n", name, n, base);
     }
   }
+
   if (all)
-    dbg_printf("You can list individual entries with 'info gdt [NUM]' or groups with 'info gdt [NUM] [NUM]'\n");
+    dbg_printf("You can list individual entries with 'info %s [NUM]' or groups with 'info %s [NUM] [NUM]'\n", name, name);
+}
+
+void bx_dbg_info_gdt_command(unsigned from, unsigned to)
+{
+  bx_dbg_info_lgdt_command(from, to, true);
 }
 
 void bx_dbg_info_ldt_command(unsigned from, unsigned to)
 {
-  bx_address ldtr_base = SIM->get_param_num("LDTR.base", dbg_cpu_list)->get64();
-  Bit32u ldtr_limit = SIM->get_param_num("LDTR.limit_scaled", dbg_cpu_list)->get();
 
-  bool all = 0;
-
-  if (to == (unsigned) EMPTY_ARG) {
-    to = from;
-    if(from == (unsigned) EMPTY_ARG) { from = 0; to = 0xffff; all = 1; }
-  }
-  if (from > 0xffff || to > 0xffff) {
-    dbg_printf("LDT entry should be [0-65535], 'info ldt' command malformed\n");
-    return;
-  }
-  if (from > to) {
-    unsigned temp = from;
-    from = to;
-    to = temp;
-  }
-
-  dbg_printf("Local Descriptor Table (base=0x" FMT_ADDRX ", limit=%d):\n", ldtr_base, ldtr_limit);
-  for (unsigned n = from; n<=to; n++) {
-    Bit8u entry[8];
-    if (8*n + 7 > ldtr_limit) break;
-    if (bx_dbg_read_linear(dbg_cpu, ldtr_base + 8*n, 8, entry)) {
-      dbg_printf("LDT[0x%02x]=", n);
-
-      Bit32u lo = (entry[3]  << 24) | (entry[2]  << 16) | (entry[1]  << 8) | (entry[0]);
-      Bit32u hi = (entry[7]  << 24) | (entry[6]  << 16) | (entry[5]  << 8) | (entry[4]);
-
-      bx_dbg_print_descriptor(lo, hi);
-    }
-    else {
-      dbg_printf("error: LDTR+8*%d points to invalid linear address 0x" FMT_ADDRX "\n",
-        n, ldtr_base);
-    }
-  }
-  if (all)
-    dbg_printf("You can list individual entries with 'info ldt [NUM]' or groups with 'info ldt [NUM] [NUM]'\n");
+  bx_dbg_info_lgdt_command(from, to, false);
 }
 
 /*form RB list*/
